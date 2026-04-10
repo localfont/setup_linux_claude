@@ -1,0 +1,112 @@
+name: Build BusyBox AMD64 glibc RootFS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      pkg_manager:
+        description: 'Package manager (xbps or pacman)'
+        required: true
+        default: 'xbps'
+        type: choice
+        options:
+          - xbps
+          - pacman
+      init_system:
+        description: 'Init system (openrc or sysvinit)'
+        required: true
+        default: 'openrc'
+        type: choice
+        options:
+          - openrc
+          - sysvinit
+
+env:
+  PKG_MANAGER: ${{ github.event.inputs.pkg_manager || 'xbps' }}
+  INIT_SYSTEM: ${{ github.event.inputs.init_system || 'openrc' }}
+  BUSYBOX_VERSION: "1.36.1"
+  ROOTFS_DIR: /tmp/rootfs
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            build-essential gcc make libssl-dev libncurses-dev \
+            wget curl git xz-utils cpio gawk bison flex \
+            libelf-dev bc python3 rsync file \
+            debootstrap qemu-user-static binfmt-support \
+            squashfs-tools
+
+      - name: Cache BusyBox source
+        uses: actions/cache@v4
+        with:
+          path: /tmp/busybox-src
+          key: busybox-${{ env.BUSYBOX_VERSION }}
+
+      - name: Build BusyBox (AMD64, glibc)
+        run: bash ${{ github.workspace }}/scripts/build_busybox.sh
+
+      - name: Bootstrap RootFS structure
+        run: bash ${{ github.workspace }}/scripts/bootstrap_rootfs.sh
+
+      - name: Install package manager (${{ env.PKG_MANAGER }})
+        run: |
+          if [ "$PKG_MANAGER" = "xbps" ]; then
+            bash ${{ github.workspace }}/scripts/install_xbps.sh
+          else
+            bash ${{ github.workspace }}/scripts/install_pacman.sh
+          fi
+
+      - name: Install core packages (wget, curl, nano, sudo)
+        run: |
+          if [ "$PKG_MANAGER" = "xbps" ]; then
+            bash ${{ github.workspace }}/scripts/install_pkgs_xbps.sh
+          else
+            bash ${{ github.workspace }}/scripts/install_pkgs_pacman.sh
+          fi
+
+      - name: Install init system (${{ env.INIT_SYSTEM }})
+        run: |
+          if [ "$INIT_SYSTEM" = "openrc" ]; then
+            bash ${{ github.workspace }}/scripts/install_openrc.sh
+          else
+            bash ${{ github.workspace }}/scripts/install_sysvinit.sh
+          fi
+
+      - name: Finalize rootfs (fstab, hostname, users)
+        run: bash ${{ github.workspace }}/scripts/finalize_rootfs.sh
+
+      - name: Package rootfs as tar.xz
+        run: |
+          cd $ROOTFS_DIR
+          sudo tar -cJf /tmp/rootfs-busybox-amd64-${{ env.PKG_MANAGER }}-${{ env.INIT_SYSTEM }}.tar.xz .
+          echo "ROOTFS_SIZE=$(du -sh /tmp/rootfs-busybox-amd64-${{ env.PKG_MANAGER }}-${{ env.INIT_SYSTEM }}.tar.xz | cut -f1)" >> $GITHUB_ENV
+
+      - name: Upload rootfs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rootfs-busybox-amd64-${{ env.PKG_MANAGER }}-${{ env.INIT_SYSTEM }}
+          path: /tmp/rootfs-busybox-amd64-${{ env.PKG_MANAGER }}-${{ env.INIT_SYSTEM }}.tar.xz
+          retention-days: 30
+
+      - name: Print build summary
+        run: |
+          echo "### ✅ Build Completed!" >> $GITHUB_STEP_SUMMARY
+          echo "| Key | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| BusyBox | ${{ env.BUSYBOX_VERSION }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Arch | amd64 (x86_64) |" >> $GITHUB_STEP_SUMMARY
+          echo "| libc | glibc |" >> $GITHUB_STEP_SUMMARY
+          echo "| Package Manager | ${{ env.PKG_MANAGER }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Init System | ${{ env.INIT_SYSTEM }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Rootfs Size | ${{ env.ROOTFS_SIZE }} |" >> $GITHUB_STEP_SUMMARY

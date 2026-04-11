@@ -27,34 +27,44 @@ if [ ! -d "${BUILD_DIR}/busybox-${BUSYBOX_VERSION}" ]; then
     tar -xf "${SRC_DIR}/${TARBALL}" -C "$BUILD_DIR"
 fi
 
-cd "${BUILD_DIR}/busybox-${BUSYBOX_VERSION}"
+BUSYBOX_SRC="${BUILD_DIR}/busybox-${BUSYBOX_VERSION}"
+cd "$BUSYBOX_SRC"
 
-# Defconfig + glibc için ayarla
+# scripts/config burada mevcut olmalı (BusyBox kaynak tarball ile gelir)
+# Yoksa make defconfig çalıştır — scripts/config generate eder
 echo "  -> .config oluşturuluyor..."
-make defconfig
+make defconfig KCONFIG_NOTIMESTAMP=1
+
+# scripts/config varlığını doğrula
+if [ ! -x "./scripts/config" ]; then
+    echo "  [HATA] scripts/config bulunamadı!"
+    ls -la scripts/ | head -20
+    exit 1
+fi
+
+CFG="./scripts/config"
 
 # Dinamik (glibc) bağlama — STATIC kapalı olmalı
-scripts/config --disable CONFIG_STATIC
-scripts/config --enable CONFIG_INSTALL_NO_USR
+$CFG --disable CONFIG_STATIC
+$CFG --enable  CONFIG_INSTALL_NO_USR
 
-# İnit araçları — BusyBox kendi initi kullanacak ama OpenRC/sysvinit kurulunca override edilecek
-scripts/config --enable CONFIG_INIT
-scripts/config --enable CONFIG_FEATURE_INIT_SYSLOG
-scripts/config --enable CONFIG_FEATURE_INIT_QUIET
+# Init araçları
+$CFG --enable CONFIG_INIT
+$CFG --enable CONFIG_FEATURE_INIT_SYSLOG
+$CFG --enable CONFIG_FEATURE_INIT_QUIET
 
 # Faydalı appletler
-scripts/config --enable CONFIG_WGET
-scripts/config --enable CONFIG_FEATURE_WGET_HTTPS
-scripts/config --enable CONFIG_FEATURE_WGET_LONG_OPTIONS
-scripts/config --enable CONFIG_CURL  || true   # BusyBox curl desteği sınırlı, ayrıca kurulacak
-scripts/config --enable CONFIG_SH_IS_ASH
-scripts/config --enable CONFIG_BASH_IS_NONE
-scripts/config --enable CONFIG_FEATURE_EDITING
-scripts/config --enable CONFIG_FEATURE_TAB_COMPLETION
-scripts/config --enable CONFIG_FEATURE_REVERSE_SEARCH
+$CFG --enable CONFIG_WGET
+$CFG --enable CONFIG_FEATURE_WGET_HTTPS
+$CFG --enable CONFIG_FEATURE_WGET_LONG_OPTIONS
+$CFG --enable CONFIG_SH_IS_ASH
+$CFG --disable CONFIG_BASH_IS_ASH    || true
+$CFG --enable  CONFIG_FEATURE_EDITING
+$CFG --enable  CONFIG_FEATURE_TAB_COMPLETION
+$CFG --enable  CONFIG_FEATURE_REVERSE_SEARCH
 
-# make oldconfig ile doğrula
-yes "" | make oldconfig
+# Yeni sorular için varsayılanları kullan (interaktif değil)
+make olddefconfig
 
 echo "  -> Derleniyor ($(nproc) çekirdek)..."
 make -j"$(nproc)" ARCH=x86_64 \
